@@ -1,0 +1,116 @@
+[webservers]
+server-1 ansible_host=192.168.1.247
+
+[webservers:vars]
+ansible_python_interpreter=/usr/bin/python3
+
+
+---
+- name: Install Nginx to Webservers
+  hosts: webservers
+  become: true
+
+  tasks:
+  - name: Install Nginx
+    apt:
+      name=nginx state=present update_cache=true
+    when:
+      ansible_os_family == "Debian"
+    notify:
+      - Nginx Systemd
+
+  handlers:
+  - name: Nginx Systemd
+    systemd:
+      name: nginx
+      enabled: true
+      state: started
+
+
+
+---
+- name: Install and config Nginx
+  hosts: webservers
+  become: yes
+  
+  vars:
+    html_dir: /usr/share/nginx/html
+    greeting: "Hello Everybody!"
+
+  tasks: 
+  - name: Install Nginx
+    apt:
+      name=nginx state=present update_cache=yes
+    when:
+      ansible_os_family == "Debian"
+    notify:
+      - Nginx Systemd
+      
+  - name: Delete default HTML files
+    shell: /bin/rm -rf /usr/share/nginx/html/*.html
+    args:
+      warn: false
+
+  - name: Replace config file
+    vars:
+      nginx_user: user
+      worker_processes: 2
+      worker_connections: 256
+    template: 
+      src: templates/nginx.conf.j2
+      dest: /etc/nginx/nginx.conf
+      mode: 0644
+    register: result
+    failed_when: result.failed == true
+    notify: Reload Nginx
+
+  - name: Copy index file
+    copy: src=files/index.html dest={{ html_dir }} mode=0644
+    notify: Reload Nginx
+      
+  - name: Generate dynamic HTML from template
+    template: 
+      src=templates/hello.html.j2 dest={{ html_dir }}/hello.html owner=root mode=0644
+    notify: Reload Nginx
+      
+  handlers:
+  - name: Nginx Systemd
+    systemd:
+      name: nginx
+      enabled: yes
+      state: started
+  - name: Reload Nginx
+    systemd: name=nginx state=reloaded
+
+
+
+"Server {{ ansible_hostname }} ( ip {{ansible_default_ipv4.address }} ) greets you: {{ greeting | default("Hello") }}!"
+
+
+
+user  {{ nginx_user }};
+worker_processes  {{ worker_processes }};
+
+error_log  /var/log/nginx/error.log warn;
+pid        /var/run/nginx.pid;
+
+events {
+    worker_connections  {{ worker_connections }};
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    keepalive_timeout  60;
+    gzip  on;
+
+    server {
+      access_log  off;
+
+      location / {
+          root /usr/share/nginx/html;
+          try_files $uri $uri/ $uri.html /index.html;
+      }
+    }
+}
